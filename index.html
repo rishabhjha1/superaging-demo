@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SuperAger classifier — explainability demo</title>
+<meta name="description" content="Upload a T1-weighted MRI volume and see the attention rollout and regional analysis from the paper, computed entirely in your browser.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --ink: #0E1116;
+  --panel: #161A21;
+  --raised: #1D222B;
+  --line: #272D38;
+  --text: #D9DEE6;
+  --muted: #8A94A3;
+  --accent: #5EC8C2;
+  --warn: #E0A458;
+  --danger: #E0705F;
+  --measure: 68ch;
+  --font: 'Archivo', ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.wrap {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem 6rem;
+}
+
+h1 {
+  font-size: clamp(1.75rem, 4vw, 2.6rem);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.75rem;
+  max-width: 22ch;
+}
+
+h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 3rem 0 0.75rem;
+}
+
+p { max-width: var(--measure); margin: 0 0 1rem; }
+
+.lede { color: var(--muted); font-size: 1.05rem; }
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  background: var(--raised);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* ------------------------------------------------------------ drop target */
+
+.drop {
+  margin: 2.5rem 0 1rem;
+  padding: 3rem 1.5rem;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+
+.drop:hover,
+.drop:focus-visible { border-color: var(--accent); background: var(--raised); }
+
+.drop.is-over { border-color: var(--accent); background: var(--raised); }
+
+.drop[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+
+.drop-title { font-size: 1.05rem; font-weight: 500; margin: 0 0 0.35rem; }
+
+.drop-hint { color: var(--muted); font-size: 0.9rem; margin: 0; max-width: none; }
+
+.samples { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+
+button.sample {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+}
+
+button.sample:hover { border-color: var(--accent); }
+
+/* -------------------------------------------------------------- feedback */
+
+.progress, .error, .notice {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1.1rem;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 0.94rem;
+}
+
+.error { border-color: var(--danger); color: #F2C4BB; }
+
+.notice { border-color: var(--warn); color: #F0D3AC; }
+
+.notice p { max-width: none; margin: 0; }
+
+.meta { color: var(--muted); font-size: 0.85rem; }
+
+/* -------------------------------------------------------------- readout */
+
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem 1.25rem;
+  padding: 1.25rem 0 0.5rem;
+}
+
+.prob { font-size: 2.75rem; font-weight: 600; letter-spacing: -0.03em; line-height: 1; }
+
+.bar {
+  --fill: 0%;
+  position: relative;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  margin: 0.75rem 0 0.4rem;
+  overflow: hidden;
+}
+
+.bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--fill);
+  background: var(--accent);
+}
+
+/* --------------------------------------------------------------- panels */
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+figure { margin: 0; }
+
+figure canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: #000;
+  image-rendering: auto;
+}
+
+figcaption { color: var(--muted); font-size: 0.85rem; margin-top: 0.45rem; }
+
+/* ---------------------------------------------------------------- table */
+
+.table-scroll { overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 0.95rem; }
+
+th, td { text-align: left; padding: 0.6rem 0.9rem 0.6rem 0; border-bottom: 1px solid var(--line); }
+
+th { color: var(--muted); font-weight: 500; }
+
+.sd { color: var(--muted); font-size: 0.85em; }
+
+/* --------------------------------------------------------------- footer */
+
+footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; }
+
+footer p { max-width: var(--measure); }
+
+ul { max-width: var(--measure); padding-left: 1.1rem; }
+
+li { margin-bottom: 0.4rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+</style>
+</head>
+
+<body>
+<main class="wrap">
+
+  <h1>See what the classifier looks at</h1>
+  <p class="lede">
+    This runs the ViT-B/16 SuperAger classifier from
+    <a href="https://github.com/rishabhjha1/superaging">the paper</a> on a
+    T1-weighted volume you choose, and draws the attention rollout and regional
+    analysis from Figure&nbsp;2. Everything happens in this browser. No scan is
+    uploaded anywhere, and there is no server to upload it to.
+  </p>
+
+  <div class="drop" id="drop" role="button" tabindex="0" aria-label="Choose a NIfTI volume">
+    <p class="drop-title">Drop a NIfTI volume here, or choose a file</p>
+    <p class="drop-hint">.nii or .nii.gz, a single 3D T1-weighted scan</p>
+  </div>
+  <input type="file" id="file" accept=".nii,.nii.gz,.gz" hidden>
+
+  <div class="samples">
+    <span class="meta">No scan handy?</span>
+    <button class="sample" data-sample="samples/sample-t1.nii.gz">Use the sample scan</button>
+  </div>
+
+  <div class="progress" id="progress" hidden>
+    <div id="status">Starting</div>
+    <div class="meta" id="backend"></div>
+  </div>
+
+  <div class="error" id="error" hidden></div>
+
+  <section id="results" hidden>
+
+    <h2>Prediction</h2>
+    <p class="meta"><span id="file-name"></span> — <span id="file-dims"></span></p>
+
+    <div class="notice" id="orientation-warning" hidden>
+      <p id="orientation-detail"></p>
+    </div>
+
+    <div class="readout">
+      <div class="prob" id="probability">—</div>
+      <div>
+        <div id="verdict"></div>
+        <div class="meta" id="threshold-note"></div>
+      </div>
+    </div>
+    <div class="bar" id="prob-bar"></div>
+    <p class="meta">
+      Probability of SuperAger status, averaged over four test-time augmented
+      passes. On 200 subjects the model reached a held-out AUC of 0.841 ± 0.059,
+      so treat a single prediction as illustrative rather than diagnostic.
+    </p>
+
+    <h2>Attention rollout</h2>
+    <p>
+      Residual-augmented attention matrices multiplied across encoder layers,
+      read from the class token and upsampled to slice resolution. The three
+      planes are shown separately because they are fused only at the embedding
+      stage.
+    </p>
+    <div class="panels">
+      <figure>
+        <canvas id="panel-axial"></canvas>
+        <figcaption>Axial mid-slice, preprocessed</figcaption>
+      </figure>
+      <figure>
+        <canvas id="panel-axial-attn"></canvas>
+        <figcaption>Axial attention</figcaption>
+      </figure>
+      <figure>
+        <canvas id="panel-coronal-attn"></canvas>
+        <figcaption>Coronal attention</figcaption>
+      </figure>
+      <figure>
+        <canvas id="panel-sagittal-attn"></canvas>
+        <figcaption>Sagittal attention</figcaption>
+      </figure>
+    </div>
+
+    <h2>Regional analysis</h2>
+    <p>
+      The axial slice is divided into a 6×6 grid mapped to five coarse regions.
+      Values are scaled relative to the peak region, so the top region sits near
+      1.0 and the rest are fractions of it. The spread is taken across five
+      slice depths at 5% increments.
+    </p>
+    <div class="panels">
+      <figure>
+        <canvas id="panel-grid"></canvas>
+        <figcaption>Regional heatmap, letters mark the region of each cell</figcaption>
+      </figure>
+    </div>
+
+    <div class="table-scroll">
+      <table id="region-table">
+        <thead>
+          <tr><th>Region</th><th>Attention (I<sub>R</sub>)</th><th>SuperAger score (S<sub>R</sub>)</th></tr>
+        </thead>
+        <tbody id="region-body"></tbody>
+      </table>
+    </div>
+
+    <div class="notice" id="table-blocked" hidden>
+      <p>
+        The regional table is withheld for this volume. The grid assumes
+        canonical RAS orientation, and a flipped or transposed scan would swap
+        frontal and parietal labels while every number still looked plausible.
+        Reorient the volume to RAS and try again.
+      </p>
+    </div>
+
+  </section>
+
+  <h2>What this demo does and does not do</h2>
+  <p>
+    Attention rollout and the grid-based regional analysis are forward-only
+    computations, so they port exactly. Grad-CAM and LIME do not, and are not
+    included here:
+  </p>
+  <ul>
+    <li>
+      Grad-CAM needs gradients with respect to patch tokens. Because the
+      backbone is frozen and only the class token reaches the classification
+      head, patch-token gradients are identically zero unless you backpropagate
+      through the final encoder block. ONNX Runtime Web has no autograd, so this
+      would mean a hand-written backward pass and a fresh source of disagreement
+      with the published figures.
+    </li>
+    <li>
+      LIME fits its linear model over 1000 masking perturbations, which is 1000
+      forward passes. Single-threaded WebAssembly would take roughly ten
+      minutes. Cutting to 200 perturbations would change the local fidelity away
+      from the 0.78 reported in the paper.
+    </li>
+  </ul>
+  <p>
+    Both are in the notebook in the
+    <a href="https://github.com/rishabhjha1/superaging">main repository</a>,
+    which is the reproducible artifact for the paper. This page is a convenience
+    for inspecting the model interactively.
+  </p>
+
+  <footer>
+    <p id="model-meta"></p>
+    <p>
+      Jha, Keenan, Gawryluk and Mbilinyi. Explainable deep learning for
+      classifying cognitive SuperAgers from structural MRI. University of
+      Victoria.
+    </p>
+  </footer>
+
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.19.2/ort.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/nifti-reader-js/0.6.8/nifti-reader-min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
