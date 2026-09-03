@@ -114,6 +114,8 @@ button.sample {
 
 button.sample:hover { border-color: var(--accent); }
 
+button.sample[disabled] { opacity: 0.45; cursor: not-allowed; }
+
 /* -------------------------------------------------------------- feedback */
 
 .progress, .error, .notice {
@@ -126,6 +128,10 @@ button.sample:hover { border-color: var(--accent); }
 }
 
 .error { border-color: var(--danger); color: #F2C4BB; }
+
+.error p { max-width: none; margin: 0 0 0.5rem; }
+
+.error p:last-child { margin-bottom: 0; }
 
 .notice { border-color: var(--warn); color: #F0D3AC; }
 
@@ -237,6 +243,16 @@ li { margin-bottom: 0.4rem; }
   <div class="samples">
     <span class="meta">No scan handy?</span>
     <button class="sample" data-sample="samples/sample-t1.nii.gz">Use the sample scan</button>
+  </div>
+
+  <div class="error" id="reader-error" hidden>
+    <p>
+      The NIfTI reader did not load, so scans cannot be parsed on this page.
+    </p>
+    <p class="meta">
+      Place a bundled <code>nifti-reader.js</code> in <code>vendor/</code>, or
+      check the browser console for which source failed.
+    </p>
   </div>
 
   <div class="progress" id="progress" hidden>
@@ -370,7 +386,58 @@ li { margin-bottom: 0.4rem; }
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.19.2/ort.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/nifti-reader-js/0.6.8/nifti-reader-min.js"></script>
+
+<!--
+  nifti-reader-js does not create a window.nifti global on its own.
+  0.6.x ships CommonJS and 0.7+ ships an ES module built with esbuild, so a
+  plain script tag leaves `nifti` undefined and every parse throws
+  "nifti is not defined". It is imported as a module here and assigned
+  explicitly, which is what upstream's own README does.
+
+  Module scripts evaluate in document order and top-level await holds that
+  order, so window.nifti is set before app.js runs.
+-->
+<script type="module">
+  const SOURCES = [
+    './vendor/nifti-reader.js',
+    'https://cdn.jsdelivr.net/npm/nifti-reader-js@0.6.6/+esm',
+  ];
+
+  function usable(lib) {
+    return lib
+      && typeof lib.readHeader === 'function'
+      && typeof lib.readImage === 'function'
+      && typeof lib.isNIFTI === 'function'
+      && typeof lib.isCompressed === 'function';
+  }
+
+  let source = null;
+  for (const src of SOURCES) {
+    try {
+      const mod = await import(src);
+      // Bundled CommonJS exposes the API as named exports; the ES-module build
+      // puts it on .default. Accept whichever one actually has the functions.
+      const lib = usable(mod.default) ? mod.default : mod;
+      if (usable(lib)) {
+        window.nifti = lib;
+        source = src;
+        break;
+      }
+      console.warn(`nifti-reader: ${src} loaded but is missing expected functions`);
+    } catch (err) {
+      console.warn(`nifti-reader: ${src} failed to load`, err);
+    }
+  }
+
+  if (source) {
+    console.info(`nifti-reader loaded from ${source}`);
+  } else {
+    document.getElementById('reader-error').hidden = false;
+    document.getElementById('drop').setAttribute('aria-disabled', 'true');
+    for (const b of document.querySelectorAll('button.sample')) b.disabled = true;
+  }
+</script>
+
 <script type="module" src="app.js"></script>
 </body>
 </html>
