@@ -38,6 +38,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+
+class ExportError(RuntimeError):
+    """Raised instead of SystemExit so notebooks show a normal traceback."""
+
+
 INPUT_SHAPE = (3, 3, 224, 224)
 CLASS_NAMES = ["Typical", "SuperAger"]
 
@@ -58,8 +63,12 @@ def load_trained_model(checkpoint_path: str | None, allow_untrained: bool = Fals
 
     if checkpoint_path is None:
         if not allow_untrained:
-            raise SystemExit("--checkpoint is required (or pass --allow-untrained "
-                             "to validate the pipeline with random weights).")
+            raise ExportError(
+                "No checkpoint given. Pass --checkpoint, or --allow-untrained to "
+                "validate the pipeline with random weights.\n"
+                "In a notebook, argparse cannot see your flags -- call main() with "
+                "them explicitly:\n"
+                "    main(['--allow-untrained', '--out', 'models'])")
         print("  UNTRAINED MODE: random head, no checkpoint. Not for release.")
         backbone = _imagenet_backbone(torchvision)
         head = torch.nn.Sequential(
@@ -88,7 +97,7 @@ def load_trained_model(checkpoint_path: str | None, allow_untrained: bool = Fals
     head_state = {k.replace("head.", ""): v
                   for k, v in state.items() if k.startswith("head.")}
     if not head_state:
-        raise SystemExit(
+        raise ExportError(
             f"No 'head.*' keys in the checkpoint. Top-level keys are: "
             f"{sorted(state)[:12]}. Adjust load_trained_model() to match how "
             f"your training script names its parameters.")
@@ -123,7 +132,7 @@ def build_head_from_state(state: dict) -> torch.nn.Sequential:
     """
     indices = sorted({int(k.split(".")[0]) for k in state if k.split(".")[0].isdigit()})
     if not indices:
-        raise SystemExit("Head state dict is not indexed like an nn.Sequential; "
+        raise ExportError("Head state dict is not indexed like an nn.Sequential; "
                          "replace build_head_from_state() with your head definition.")
 
     layers: list[torch.nn.Module] = []
@@ -137,7 +146,7 @@ def build_head_from_state(state: dict) -> torch.nn.Sequential:
         elif w.ndim == 2:
             layers.append(torch.nn.Linear(w.shape[1], w.shape[0], bias=b is not None))
         else:
-            raise SystemExit(
+            raise ExportError(
                 f"Cannot infer layer {i} from weight shape {tuple(w.shape)}.")
     return torch.nn.Sequential(*layers)
 
@@ -229,7 +238,7 @@ def test_wrapper_matches_torchvision(backbone, head, tol=1e-4) -> float:
 
     delta = (mine - theirs).abs().max().item()
     if delta > tol:
-        raise SystemExit(
+        raise ExportError(
             f"The attention wrapper does not reproduce the original model "
             f"(max |delta| = {delta:.2e} > {tol:.0e}). Do not export. Check that "
             f"load_trained_model() rebuilds the architecture you trained.")
@@ -293,7 +302,7 @@ def load_parity_tensors(path: str | None, n_random: int = 8) -> list[np.ndarray]
     elif arr.ndim == 5 and arr.shape[1:] == INPUT_SHAPE:
         print(f"  {path}: {arr.shape}, used as-is")
     else:
-        raise SystemExit(
+        raise ExportError(
             f"--parity-tensors has shape {arr.shape}; expected (N, 3, 224, 224) "
             f"or (N, 3, 3, 224, 224).")
 
@@ -315,6 +324,26 @@ def export_graph(wrapped, path: Path) -> None:
     if "dynamo" in inspect.signature(torch.onnx.export).parameters:
         kwargs["dynamo"] = False
     torch.onnx.export(wrapped, torch.randn(*INPUT_SHAPE), str(path), **kwargs)
+
+
+def preflight() -> None:
+    """Fail on missing packages before the slow work, not after.
+
+    Quantisation and parity both import onnxruntime, but only once the export
+    has already run. On a fresh kernel that wastes the whole export.
+    """
+    missing = []
+    for mod, why in (("onnxruntime", "quantisation and parity"),
+                     ("onnx", "the quantiser's graph rewriting")):
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(f"{mod} (needed for {why})")
+    if missing:
+        raise ExportError(
+            "Missing packages: " + "; ".join(missing) + ".\n"
+            "    !pip install -q onnxruntime onnx\n"
+            "Then restart the kernel before re-running.")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -341,10 +370,21 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--keep-fp32", action="store_true",
                     help="Keep the fp32 graph in models/ (it is deleted by "
                          "default; only the int8 graph ships).")
-    # Jupyter injects kernel arguments into argv; parse an empty list there.
+    # Jupyter injects kernel arguments into argv, so they cannot be parsed.
+    # In a notebook, pass them to main() directly instead.
     if argv is None:
-        argv = [] if "ipykernel" in sys.modules else sys.argv[1:]
+        in_notebook = "ipykernel" in sys.modules
+        if in_notebook:
+            raise ExportError(
+                "Running under IPython/Jupyter, where argparse cannot read "
+                "command-line flags. Call main() with an explicit list:\n"
+                "    main(['--allow-untrained', '--out', 'models'])\n"
+                "    main(['--checkpoint', 'best.pt', '--out', 'models',\n"
+                "          '--parity-tensors', 'X.npy', '--threshold', '0.46'])")
+        argv = sys.argv[1:]
     args = ap.parse_args(argv)
+
+    preflight()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -426,4 +466,14 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Pasting this file into a notebook cell also makes __name__ == "__main__",
+    # so guard the auto-run: in a notebook the flags live in the main() call the
+    # user writes next, not on a command line.
+    if "ipykernel" in sys.modules:
+        print("export_onnx loaded. Nothing has run yet -- call main() with your "
+              "flags in the next cell, e.g.\n"
+              "    main(['--allow-untrained', '--out', 'models'])\n"
+              "    main(['--checkpoint', 'best.pt', '--out', 'models',\n"
+              "          '--parity-tensors', 'X.npy', '--threshold', '0.46'])")
+    else:
+        main()
