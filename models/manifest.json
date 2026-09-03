@@ -1,0 +1,55 @@
+{
+  "model_file": "vit_superager.int8.onnx",
+  "exported_at": "2026-09-03",
+  "untrained": true,
+  "input_name": "views",
+  "input_shape": [
+    3,
+    3,
+    224,
+    224
+  ],
+  "output_names": [
+    "logits",
+    "attention"
+  ],
+  "attention_shape": [
+    12,
+    3,
+    197,
+    197
+  ],
+  "class_names": [
+    "Typical",
+    "SuperAger"
+  ],
+  "superager_index": 1,
+  "input_size": 224,
+  "mask_fraction": 0.15,
+  "tta": true,
+  "tta_views": [
+    "original",
+    "hflip",
+    "scale_1.05",
+    "scale_0.95"
+  ],
+  "threshold": 0.5,
+  "channel_mean": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "channel_std": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "site_stats": {
+    "pooled": {
+      "mean": 0.0,
+      "sd": 1.0
+    }
+  },
+  "parity_max_delta": 0.0042,
+  "parity_fp32_max_delta": 8.941e-08
+}
